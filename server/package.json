@@ -1,10 +1,26 @@
 {
   "name": "server",
   "version": "1.0.0",
-  "description": "\"Mediasoup server with websocket and express server setup for one to many video conferencing call excrcise\"",
+  "description": "\"Mediasoup server with websocket and express server setup for one to many video conferencing call exercise\"",
   "main": "index.js",
-  "repository": "https://github.com/david-jerry/mediasoup-sfu-app.git",
+  "repository": "https://github.com/david-jerry/mediasoup-sfu-app/tree/main/server",
   "author": "Jeremiah David",
   "license": "MIT",
-  "private": false
+  "private": true,
+  "scripts": {
+    "dev": "nodemon --watch 'src/**/*.ts'"
+  },
+  "dependencies": {
+    "@types/cors": "^2.8.17",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mediasoup": "^3.14.1",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/typescript": "^2.0.0",
+    "@types/ws": "^8.5.10",
+    "nodemon": "^3.1.0",
+    "ts-node": "^10.9.2"
+  }
 }
