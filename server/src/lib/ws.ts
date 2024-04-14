@@ -1,22 +1,39 @@
-import WebSocket from "ws";
+import { Namespace, Socket } from "socket.io";
 import { types as mediasoupTypes } from "mediasoup";
-import { createWorker } from "../mediasoup/workers";
-import cors from 'cors';
+import { createRouter, createWorker } from "../mediasoup/workers";
 import { createWebRtcTransport } from "../mediasoup/rtcTransports";
+import { IsJsonString, broadcast, send } from "./utils";
+import { DefaultEventsMap } from "socket.io/dist/typed-events";
 
 let mediasoupRouter: mediasoupTypes.Router;
 let producerTransport: mediasoupTypes.Transport;
+let producer: mediasoupTypes.Producer
 
-const WebSocketConnection = async (websock: WebSocket.Server) => {
+const WebSocketConnection = async (io: Namespace<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>) => {
 
     try {
-        mediasoupRouter = await createWorker()
+        const worker = await createWorker();
+        mediasoupRouter = await createRouter(worker);
     } catch (error) {
         throw error;
     }
 
-    websock.on('connection', (ws: WebSocket) => {
-        ws.on('message', (message: string) => {
+    io.on('connection', async (socket: Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>) => {
+        console.info(`Peer/Socket Connected: ${socket.id}`);
+
+        socket.emit('connection-success', {
+            socketId: socket.id
+        });
+
+        /**
+         * Event handler for peer disconnection.
+         * This can be used to clean up resources associated with the peer.
+         */
+        socket.on("disconnect", () => {
+            console.log("Peer disconnected");
+        });
+
+        socket.on('message', (message: string) => {
             const jsonValidation = IsJsonString(message)
             if (!jsonValidation) {
                 console.error("json error")
@@ -27,36 +44,50 @@ const WebSocketConnection = async (websock: WebSocket.Server) => {
 
             switch (event.type) {
                 case "getRouterRtpCapabilities":
-                    onRouterRtcCapabilities(event, ws);
+                    onRouterRtcCapabilities(event, socket);
                     break;
                 case "createProducerTransport":
-                    onCreateProducerTransport(event, ws)
+                    onCreateProducerTransport(event, socket);
+                    break;
+                case "connectProducerTransport":
+                    onConnectProducerTransport(event, socket);
+                    break;
+                case "produce":
+                    onProduce(event, socket);
+                    break;
                 default:
                     break;
             }
         })
     });
 
-    const IsJsonString = (msg: string) => {
-        try {
-            JSON.parse(msg);
-        } catch (error) {
-            return false;
+    const onProduce = async (event: any, ws: Socket) => {
+        const {
+            kind,
+            rtpParameters
+        } = event;
+
+        producer = await producerTransport.produce({ kind, rtpParameters })
+        const resp = {
+            id: producer.id
         }
 
-        return true;
+        // send to listeners
+        send(ws, 'producing', resp)
+        // broadcast to everyone connected
+        broadcast(ws, "newProducer", "New user")
     }
 
-    const onRouterRtcCapabilities = (event: String, ws: WebSocket) => {
+    const onRouterRtcCapabilities = (event: String, ws: Socket) => {
         send(ws, "routerCapabilities", mediasoupRouter.rtpCapabilities);
     };
 
-    const onCreateProducerTransport = async (event: String, ws: WebSocket) => {
+    const onCreateProducerTransport = async (event: String, ws: Socket) => {
         try {
             const {
                 transport, params,
             } = await createWebRtcTransport(mediasoupRouter);
-            producerTransport = transport
+            producerTransport = transport!
             send(ws, "producerTransportCreated", params)
         } catch (error) {
             console.error(error)
@@ -64,15 +95,12 @@ const WebSocketConnection = async (websock: WebSocket.Server) => {
         }
     };
 
-    const send = (ws: WebSocket, type: string, msg: any) => {
-        const message = {
-            type,
-            data: msg
-        }
+    // TODO: Watch for error
+    const onConnectProducerTransport = async (event: any, socket: Socket) => {
+        await producerTransport.connect({ dltsParameters: event.dtlsParameters })
+        send(socket, 'producerConnected', 'producer is connected')
+    };
 
-        const response = JSON.stringify(message);
-        ws.send(response)
-    }
 }
 
 export { WebSocketConnection };

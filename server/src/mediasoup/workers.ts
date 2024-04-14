@@ -2,12 +2,8 @@ import * as mediasoup from "mediasoup";
 import { config } from "./config";
 import { Worker, Router, AppData } from "mediasoup/node/lib/types";
 
-// let worker: Array<{
-//     worker: Worker
-//     router: Router
-// }> = [];
-
 let worker: Worker<AppData>;
+let router: Router<AppData>;
 
 let nextMediasoupWorkerIdx = 0;
 
@@ -26,9 +22,14 @@ const createWorker = async () => {
         }, 2000);
     })
 
-    const mediaCodecs = config.mediasoup.router.mediaCodecs;
-    const mediasoupRouter = await newWorker.createRouter({mediaCodecs});
-    return mediasoupRouter
+    worker = newWorker;
+    return worker;
 }
 
-export { createWorker};
+const createRouter = async (worker: Worker<AppData>) => {
+    const mediaCodecs = config.mediasoup.router.mediaCodecs;
+    router = await worker.createRouter({mediaCodecs});
+    return router;
+}
+
+export { createWorker, createRouter};
