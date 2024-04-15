@@ -13,7 +13,6 @@ import {
   Transport,
 } from "mediasoup-client/lib/types";
 import { v4 as uuidV4, v4 } from "uuid";
-import { useGlobalStore } from "@/hooks/globalStore";
 
 
 export default function Home() {
