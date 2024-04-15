@@ -1,11 +1,10 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-// import WebSocket from "ws";
-import { io as WebSocket } from "socket.io-client";
-import { Device } from "mediasoup-client";
+import { Socket, io } from "socket.io-client";
+import { Device } from "mediasoup-client"
 import {
+  Device as DeviceType,
   DtlsParameters,
   IceCandidate,
   IceParameters,
@@ -14,7 +13,7 @@ import {
   Transport,
 } from "mediasoup-client/lib/types";
 import { v4 as uuidV4, v4 } from "uuid";
-import { IsJsonString } from "@/lib/utils";
+import { useGlobalStore } from "@/hooks/globalStore";
 
 
 export default function Home() {
@@ -28,7 +27,6 @@ export default function Home() {
   const btnScreenRef = useRef<HTMLButtonElement | null>(null);
   const btnSubRef = useRef<HTMLButtonElement | null>(null)
 
-  let [message, setMessage] = useState<string>('')
 
   /**
    * State to hold encoding parameters for the media stream.
@@ -54,14 +52,8 @@ export default function Home() {
    * State to hold references to various mediasoup client-side entities.
    * These entities are crucial for managing the media transmission and reception.
    */
-  const [socket, setSocket] = useState<any>(null)
-  const [websocketUrl, setWebsocketUrl] = useState("http://localhost:4000/mediasoup-ws");
-  const [textWebCam, setTextWebCam] = useState('');
-  const [textPublish, setTextPublish] = useState('');
-  const [textScreen, setTextScreen] = useState('');
-  const [textSubscribe, setTextSubscribe] = useState('');
-  const [userId, setUserId] = useState<typeof v4 | null>(null)
-  const [isWebcam, setIsWebcam] = useState<boolean>(true)
+
+  const [socket, setSocket] = useState<any>(null); // mediasoup Device
   const [device, setDevice] = useState<Device | null>(null); // mediasoup Device
   const [rtpCapabilities, setRtpCapabilities] = useState<RtpCapabilities | null>(null); // RTP Capabilities for the device
   const [producer, setProducer] = useState<Producer | undefined>(undefined)
@@ -70,44 +62,75 @@ export default function Home() {
   ); // Transport for sending media
   const [consumerTransport, setConsumerTransport] = useState<any>(null); // Transport for receiving media
 
+  const textWebCam = 'streaming from webcam';
+  const textScreen = 'sharing screen';
+  const [textPublish, setTextPublish] = useState('');
+  const [textSubscribe, setTextSubscribe] = useState('');
 
-  const connect = () => {
-    // starting the socket requests
-    socket!.onopen = () => {
-      const msg = {
-        type: "getRouterRtpCapabilities"
-      }
+  const [userId, setUserId] = useState<typeof v4 | null>(null)
+  const [isWebcam, setIsWebcam] = useState<boolean | null>(null)
 
-      const resp = JSON.stringify(msg);
-      socket!.send(resp);
+  useEffect(() => {
+    if (btnCamRef.current) {
+      btnCamRef.current.disabled = true
+    }
+    if (btnScreenRef.current) {
+      btnScreenRef.current.disabled = true
     }
 
-    socket!.onmessage = (e: { data: any; }) => {
-      const jsonValidation = IsJsonString(message)
-      if (!jsonValidation) {
-        console.error("json error")
-        return
-      }
+    const socket: Socket = io("http://localhost:4000/mediasoup-ws");
+    console.log(socket)
+    setSocket(socket);
 
-      // TODO: check this if there is an error output
-      let response = JSON.parse(JSON.stringify(e.data));
 
-      switch (response.type) {
+    return () => {
+      socket.disconnect();
+    };
+  }, [])
+
+  useEffect(() => {
+    socket.on('connection-success', async (args: any) => { connect(socket, args) })
+  }, [socket])
+
+
+  // create device and set the router capabilities to that device
+  const connect = (ws: Socket, args: any) => {
+    setSocket(ws);
+    console.log("Socket: ", socket.connected)
+    setUserId(args.socketId)
+
+    initializeCamera();
+
+    // getting router capabilities
+    const msg = {
+      type: "routerCapabilities"
+    }
+    ws.emit("getRouterRtpCapabilities", msg);
+
+
+    ws.onAny(async (eventName, args) => {
+      console.log("Listener EventName: ", eventName)
+
+      // TODO: I need to check this if there is an error output
+      let response = args;
+      console.log("Listener Arguments: ", response)
+
+      switch (eventName) {
         case "routerCapabilities":
-          onRouterCapabilities(response)
+          await onRouterCapabilities(response)
           break;
         case 'producerTransportCreated':
-          onProducerTransportCreated(response);
+          await onProducerTransportCreated(response);
           break
         default:
           break
       }
-    }
+    })
   }
 
-
-  const onRouterCapabilities = (resp: any) => {
-    loadDevice(resp.data);
+  const onRouterCapabilities = async (resp: any) => {
+    const newDevice = new Device();
+    await loadDevice(resp.data, newDevice);
     if (btnCamRef.current) {
       btnCamRef.current.disabled = false
     }
@@ -116,46 +139,103 @@ export default function Home() {
     }
   };
 
+  const loadDevice = async (routerRtpCapabilities: RtpCapabilities, newDevice: DeviceType) => {
+    console.log("RTP Capabilities: ", routerRtpCapabilities)
+    setRtpCapabilities(routerRtpCapabilities)
+    try {
+      console.info("Set Device: ", newDevice?.loaded)
+      await newDevice.load({ routerRtpCapabilities });
+      console.info("After Loading Device: ", device?.loaded)
+    } catch (error: any) {
+      if (error.name === "UnsupportedError") {
+        console.log("browser not supported")
+      }
+    }
+    setDevice(newDevice);
+  }
+
+
+
+
+
+
+
+
+
+  /**
+   * Function to start the camera and obtain a media stream.
+   * This stream is then attached to the local video element for preview.
+   */
+  const startCamera = async () => {
+    if (!device!.canProduce('video')) {
+      console.error("Cannot produce video")
+      return;
+    }
+
+    let stream;
+
+    try {
+      // if not screen share show the video only then if screen share display the shared screen/whitebpard.
+      stream = isWebcam ? await navigator.mediaDevices.getUserMedia({ video: true, audio: true }) : await navigator.mediaDevices.getDisplayMedia({ video: true });
+    } catch (error) {
+      console.error("Error accessing camera:", error);
+      throw error
+    }
+
+    return stream;
+  };
+
   const onProducerTransportCreated = async (event: any) => {
+    console.log(event)
     if (event.error) {
       console.error("producer transport create error: ", event.error)
       return;
     }
 
-    const newTransport = device!.createSendTransport(event.data)
-    setProducerTransport(newTransport);
+    let newTransport = device!.createSendTransport(event)
+    console.log("Producer Transport: ", newTransport)
+    setProducerTransport(newTransport || null);
 
-    producerTransport!.on('connect', async ({ dtlsParameters }, callback, errback) => {
-      const msg = {
-        type: "connectProducerTransport",
-        dtlsParameters
+    newTransport!?.on('connect', async ({ dtlsParameters }, callback: any, errback: any) => {
+      try {
+        const msg = {
+          type: "connectProducerTransport",
+          data: dtlsParameters
+        }
+
+        socket!.emit(msg.type, msg);
+
+        socket!.on('producerConnected', (event: any) => {
+          console.log("Got producerConnected: ", event)
+          callback(); //means done
+        })
+      } catch (error: any) {
+        errback(error)
       }
-      const resp = JSON.stringify(msg)
-      socket!.send(resp);
-
-      socket!.addEventListener('producerConnected', (event: any) => {
-        callback(); //means done
-      })
     });
 
-    // Begind producer transport
-    producerTransport!.on('produce', async ({ kind, rtpParameters }, callback, errback) => {
-      const msg = {
-        type: 'produce',
-        transportId: producerTransport!.id,
-        kind,
-        rtpParameters
-      }
+    // Begin producer transport
+    newTransport!.on('produce', async ({ kind, rtpParameters }, callback: any, errback: any) => {
+      try {
+        const msg = {
+          type: 'produce',
+          transportId: newTransport!.id,
+          kind,
+          rtpParameters
+        }
 
-      const resp = JSON.stringify(msg)
-      socket!.send(resp);
-      socket!.addEventListener('producing', (resp: any) => {
-        callback(resp.data.id)
-      })
+
+        socket!.emit(msg.type, { data: msg });
+
+        socket!.on('producing', (resp: any) => {
+          callback(resp.data.id)
+        })
+      } catch (error: any) {
+        errback(error)
+      }
     });
 
-    //@ts-expect-error
-    producerTransport!.on('connectionStatechange', (state: any) => {
+    newTransport!.on('connectionstatechange', (state: any) => {
       switch ((state)) {
         case "connecting":
           setTextPublish("publishing...")
@@ -183,7 +263,7 @@ export default function Home() {
         setParams((current) => ({ ...current, track }));
       }
 
-      const newProducer = await producerTransport!.produce(params)
+      const newProducer = await newTransport!.produce(params)
       setProducer(newProducer)
     } catch (error) {
       console.error(error)
@@ -191,80 +271,53 @@ export default function Home() {
     }
   }
 
-  const publish = (e: any) => {
-    const newWebCam = (e.target.id)
-    setIsWebcam(newWebCam === 'btn_webcam');
-    setTextPublish(isWebcam ? textWebCam : textScreen)
-    if (btnScreenRef.current && btnCamRef.current) {
-      btnScreenRef.current.disabled = false;
-      btnCamRef.current.disabled = false;
-    }
+  const publish = (webCam: boolean) => {
+    console.log("Clicked publish button")
+    setIsWebcam(webCam);
+    setTextPublish(webCam ? textWebCam : textScreen)
+
+    console.log("Starting webcam, first known socket: ", socket)
+    console.log("Connected device: ", device)
 
     const message = {
-      type: 'createProducerTransport',
+      type: "producerTransportCreated",
       forceTcp: false,
       rtpCapabilities: device!.rtpCapabilities
     }
 
-    const resp = JSON.stringify(message);
-    socket!.send(resp);
+    console.log("Sending producer transport event message", message)
+
+    socket?.emit("createProducerTransport", message);
   }
 
-  const loadDevice = async (routerRtpCapabilities: RtpCapabilities) => {
-    setRtpCapabilities(routerRtpCapabilities)
+
+
+
+  const initializeCamera = async () => {
     try {
-      const newDevice = new Device();
-      setDevice(newDevice)
-    } catch (error: any) {
-      if (error.name === "UnsupportedError") {
-        console.log("browser not supported")
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (videoRef.current) {
+        const track = stream.getVideoTracks()[0];
+        videoRef.current.srcObject = stream;
+        setParams((current) => ({ ...current, track }));
       }
+    } catch (error: any) {
+      console.error("Error accessing camera: ", error);
     }
-
-    await device!.load({ routerRtpCapabilities })
   }
-
-  /**
-   * Function to start the camera and obtain a media stream.
-   * This stream is then attached to the local video element for preview.
-   */
-  const startCamera = async () => {
-    if (!device?.canProduce('video')) {
-      console.error("Cannot produce video")
-      return;
-    }
-
-    let stream;
-
-    try {
-      // if not screen share show the video only then if screenshare display the screenshared.
-      stream = isWebcam ? await navigator.mediaDevices.getUserMedia({ video: true, audio: true }) : await navigator.mediaDevices.getDisplayMedia({ video: true });
-    } catch (error) {
-      console.error("Error accessing camera:", error);
-      throw error
-    }
-
-    return stream;
-  };
-
-  useEffect(() => {
-    const ws = WebSocket(websocketUrl)
-    console.log("Socket: ", ws)
-    setSocket(ws);
-    setUserId(uuidV4);
-    
-    connect();
-  }, [])
 
   return (
-    <main className="max-h-screen p-24 gap-6 grid gird-cols-1 lg:grid-cols-2">
-      <video className="h-screen" ref={videoRef} autoPlay={true} playsInline={true} />
-      <video className="h-screen" ref={remoteVideoRef} autoPlay={true} playsInline={true} />
-      <div className="gap-5 w-screen px-4 md:px-24 lg:px-32 xl:px-44 flex items-center justify-center">
-        <button id="btn_webcam" onClick={publish} className="h-16 flex flex-col items-center justify-center mx-auto px-6 rounded-xl bg-black text-white hover:bg-gray-700 duration-300 ease-in-out" ref={btnCamRef} type="button">Publish Camera</button>
-        <button onClick={publish} className="h-16 flex flex-col items-center justify-center mx-auto px-6 rounded-xl bg-black text-white hover:bg-gray-700 duration-300 ease-in-out" ref={btnScreenRef} type="button">Screen Share</button>
+    <main className="w-screen max-h-screen p-24 h-screen">
+      <div className="max-h-[calc(100vh_-_64px)] gap-6 grid gird-cols-1 lg:grid-cols-2">
+        <video className="border-black rounded-xl border-4 w-full block h-full" ref={videoRef} autoPlay playsInline />
+        <video className="border-black rounded-xl border-4 w-full block h-full" ref={remoteVideoRef} autoPlay playsInline />
+      </div>
+      <div className="py-6 gap-5 w-full px-4 md:px-24 lg:px-32 xl:px-44 flex items-center justify-center">
+        <button onClick={() => publish(true)} className={`${isWebcam && isWebcam !== null ? 'bg-red-500 text-white' : 'bg-black text-white hover:bg-gray-700'} h-16 flex flex-col items-center justify-center mx-auto px-6 rounded-xl duration-300 ease-in-out`} ref={btnCamRef} type="button">Publish Camera</button>
+        <button onClick={() => publish(false)} className={`${!isWebcam === null && isWebcam !== true ? 'bg-red-500 text-white' : 'bg-black text-white hover:bg-gray-700'} h-16 flex flex-col items-center justify-center mx-auto px-6 rounded-xl duration-300 ease-in-out`} ref={btnScreenRef} type="button">Screen Share</button>
         <button className="h-16 flex flex-col items-center justify-center mx-auto px-6 rounded-xl bg-black text-white hover:bg-gray-700 duration-300 ease-in-out" ref={btnSubRef} type="button">Subscribe</button>
       </div>
     </main>
   );
 }
+

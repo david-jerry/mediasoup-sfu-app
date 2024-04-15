@@ -1,7 +1,7 @@
 import express from "express";
 import * as http from "http";
 import { Server } from "socket.io";
-import { WebSocketConnection } from "./lib/ws";
+import { WebSocketConnection } from "./socket/ws";
 import cors from 'cors';
 import { availableParallelism } from 'node:os';
 import cluster from 'node:cluster';

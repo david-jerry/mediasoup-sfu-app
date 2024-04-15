@@ -1,4 +1,5 @@
-import { Socket } from "socket.io";
+import { Namespace, Socket } from "socket.io";
+import { DefaultEventsMap } from "socket.io/dist/typed-events";
 
 const IsJsonString = (msg: string) => {
     try {
@@ -11,22 +12,20 @@ const IsJsonString = (msg: string) => {
 }
 
 const send = (socket: Socket, type: string, msg: any) => {
-    const message = {
-        type,
-        data: msg
-    }
-
-    const resp = JSON.stringify(message);
-    socket.emit(resp)
-}
-
-const broadcast = (socket: Socket, type: string, msg: any) => {
     const msgs = {
         type,
         data: msg
     }
-    const resp = JSON.stringify(msgs)
-    socket.broadcast.emit(resp)
+
+    socket.emit(msgs.type, msgs.data)
+}
+
+const broadcast = (io: Namespace<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>, type: string, msg: any) => {
+    const msgs = {
+        type,
+        data: msg
+    }
+    io.emit(msgs.type, msgs.data)
 }
 
 
